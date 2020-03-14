@@ -16,20 +16,21 @@ import "@babel/polyfill";
 import * as mobilenetModule from "@tensorflow-models/mobilenet";
 import * as tf from "@tensorflow/tfjs";
 import * as knnClassifier from "@tensorflow-models/knn-classifier";
-import { expectPromiseToFail } from "@tensorflow/tfjs-core/dist/test_util";
 
 // Webcam Image size. Must be 227.
 const IMAGE_SIZE = 227;
 // K value for KNN
 const TOPK = 10;
 
-const classes = ["Touching", "Neutral"];
+const classes = ["Touching", "Not Touching"];
 // Number of classes to classify
 const NUM_CLASSES = classes.length;
-let letterIndex = 0;
 
 let testPrediction = false;
-let training = true;
+let knn;
+let touchingCount = 0;
+let notTouchingCount = 0;
+let lastSoundPlay = new Date();
 
 const trainingSection = document.getElementsByClassName("training-section")[0];
 const videoArea = document.getElementsByClassName("video-area")[0];
@@ -73,10 +74,22 @@ class Main {
       div.style.marginBottom = "10px";
 
       // Listen for mouse events when clicking the button
-      button.addEventListener("mousedown", () => (this.training = i));
-      button.addEventListener("touchstart", () => (this.training = i));
-      button.addEventListener("mouseup", () => (this.training = -1));
-      button.addEventListener("touchend", () => (this.training = -1));
+      button.addEventListener("mousedown", () => {
+        testPrediction = false;
+        this.training = i;
+      });
+      button.addEventListener("touchstart", () => {
+        testPrediction = false;
+        this.training = i;
+      });
+      button.addEventListener("mouseup", () => {
+        testPrediction = true;
+        this.training = -1;
+      });
+      button.addEventListener("touchend", () => {
+        testPrediction = true;
+        this.training = -1;
+      });
 
       // // Create info text
       const infoText = document.createElement("span");
@@ -106,8 +119,21 @@ class Main {
   }
 
   async bindPage() {
-    this.knn = knnClassifier.create();
+    knn = knnClassifier.create();
     this.mobilenet = await mobilenetModule.load();
+
+    const stateJson = await fetch("state.json");
+    const { state } = await stateJson.json();
+    knn.setClassifierDataset(
+      Object.fromEntries(
+        state.map(([label, data, shape]) => [label, tf.tensor(data, shape)])
+      )
+    );
+    testPrediction = true;
+
+    trainingSection.style.display = "block";
+
+    setInterval(statusCheck, 200);
 
     this.start();
   }
@@ -139,51 +165,36 @@ class Main {
         logits = infer();
 
         // Add current image to classifier
-        this.knn.addExample(logits, this.training);
+        knn.addExample(logits, this.training);
       }
 
-      const numClasses = this.knn.getNumClasses();
+      const numClasses = knn.getNumClasses();
 
       //start prediction
-      if (testPrediction) {
-        training = false;
-        if (numClasses > 0) {
-          // If classes have been added run predict
-          logits = infer();
-          const res = await this.knn.predictClass(logits, TOPK);
+      if (testPrediction && numClasses > 0) {
+        // If classes have been added run predict
+        logits = infer();
+        const res = await knn.predictClass(logits, TOPK);
 
-          for (let i = 0; i < NUM_CLASSES; i++) {
-            // The number of examples for each class
-            const exampleCount = this.knn.getClassExampleCount();
+        for (let i = 0; i < NUM_CLASSES; i++) {
+          // The number of examples for each class
+          const exampleCount = knn.getClassExampleCount();
 
-            // Make the predicted class bold
-            if (res.classIndex == i) {
-              this.infoTexts[i].style.fontWeight = "bold";
-            } else {
-              this.infoTexts[i].style.fontWeight = "normal";
-            }
-
-            if (res.confidences[i] && res.classIndex == 0) {
-              statusText.innerText = "Stop touching your face!";
-              statusText.classList.add("status-touching");
-            } else {
-              statusText.innerText = "Good, you are not touching your face!";
-              statusText.classList.remove("status-touching");
-            }
-
-            // Update info text
-            if (exampleCount[i] > 0) {
-              this.infoTexts[i].innerText = ` ${
-                exampleCount[i]
-              } examples - ${res.confidences[i] * 100}%`;
-            }
+          // Update info text
+          if (exampleCount[i] > 0) {
+            this.infoTexts[i].innerText = ` ${exampleCount[i]} examples - ${res
+              .confidences[i] * 100}%`;
           }
         }
-      }
 
-      if (training) {
+        if (res.confidences[0] > 0.5) {
+          touchingCount++;
+        } else {
+          notTouchingCount++;
+        }
+      } else {
         // The number of examples for each class
-        const exampleCount = this.knn.getClassExampleCount();
+        const exampleCount = knn.getClassExampleCount();
 
         for (let i = 0; i < NUM_CLASSES; i++) {
           // Update info text
@@ -203,11 +214,38 @@ class Main {
   }
 }
 
-if (window.location.toString().match("training.html")) {
-  window.addEventListener("load", () => new Main());
-  document
-    .getElementsByClassName("test-predictions")[0]
-    .addEventListener("click", function() {
-      testPrediction = true;
-    });
+function statusCheck() {
+  if (touchingCount > notTouchingCount) {
+    statusText.innerText = "Stop touching your face!";
+    statusText.classList.add("status-touching");
+    statusText.classList.remove("status-not-touching");
+    buzz();
+  } else {
+    statusText.innerText = "Good, you are not touching your face!";
+    statusText.classList.remove("status-touching");
+    statusText.classList.add("status-not-touching");
+  }
+  touchingCount = 0;
+  notTouchingCount = 0;
 }
+
+function buzz() {
+  if (new Date() - lastSoundPlay > 2000) {
+    let sound = new Audio("wrong.mp3"); // buffers automatically when created
+    sound.play();
+    lastSoundPlay = new Date();
+  }
+}
+
+window.addEventListener("load", () => new Main());
+
+window.saveDataset = () => {
+  let state = JSON.stringify(
+    Object.entries(knn.getClassifierDataset()).map(([label, data]) => [
+      label,
+      Array.from(data.dataSync()),
+      data.shape
+    ])
+  );
+  localStorage.setItem("state", state);
+};
