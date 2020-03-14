@@ -1,6 +1,6 @@
-# Teachable keyboard using Tensorflow.js
+# Stop Touching Your Face using Tensorflow.js
 
-This project is a very quick prototype using the [Teachable Machine Boilerplate](https://github.com/googlecreativelab/teachable-machine-boilerplate).
+This project is a fork of [teachable-keyboard](https://github.com/charliegerard/teachable-keyboard).
 
 It uses [tensorflow.js](https://github.com/tensorflow/tfjs-models) with a KNN classifier that is trained live in the browser using images from the webcam.
 
